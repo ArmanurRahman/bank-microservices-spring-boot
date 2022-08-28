@@ -1,0 +1,187 @@
+version: "3.8"
+
+services:
+  prometheus:
+   image: prom/prometheus:latest
+   ports:
+      - "9090:9090"
+   volumes:
+    - ./prometheus.yml:/etc/prometheus/prometheus.yml
+   networks:
+    - bank-network
+
+  grafana:
+    image: "grafana/grafana:latest"
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=password
+    networks:
+     - bank-network
+    depends_on:
+      - prometheus
+
+  zipkin:
+    image: openzipkin/zipkin
+    mem_limit: 700m
+    ports:
+      - "9411:9411"
+    networks:
+     - bank-network
+
+  configserver:
+    # image: mubeenarman034/bank-configserver
+    # build:
+    #   context: ./configserver
+    image: mubeenarman034/bank-configserver
+    mem_limit: 700m
+    ports:
+      - "8071:8071"
+    networks:
+      - bank-network
+    depends_on:
+      - zipkin
+    healthcheck:
+      test: curl --fail http://localhost:8071/actuator/health || exit 1
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 5s
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_ZIPKIN_BASEURL: http://zipkin:9411/
+
+  eurekaserver:
+    image: mubeenarman034/bank-eurekaserver
+    mem_limit: 700m
+    ports:
+     - "8070:8070"
+    networks:
+      - bank-network
+    depends_on:
+      configserver:
+        condition: service_healthy
+
+    healthcheck:
+      test: curl --fail http://localhost:8070/actuator/health || exit 1
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 5s
+
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 10
+        window: 120s
+    environment:
+    #   SPRING_PROFILES_ACTIVE: default
+    #   SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      SPRING_ZIPKIN_BASEURL: http://zipkin:9411/
+
+  
+  accounts:
+    # build: 
+    #   context: ./accounts
+    image: mubeenarman034/bank-accounts
+    mem_limit: 700m
+    ports:
+      - "8080:8080"
+    networks:
+      - bank-network
+    depends_on:
+      configserver:
+        condition: service_healthy
+      eurekaserver:
+        condition: service_healthy
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+        window: 120s
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eurekaserver:8070/eureka/
+      SPRING_ZIPKIN_BASEURL: http://zipkin:9411/
+
+  loans:
+    image: mubeenarman034/bank-loans
+    mem_limit: 700m
+    ports:
+      - "8090:8080"
+    networks:
+      - bank-network
+    depends_on:
+      configserver:
+        condition: service_healthy
+      eurekaserver:
+        condition: service_healthy
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+        window: 120s
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eurekaserver:8070/eureka/
+      SPRING_ZIPKIN_BASEURL: http://zipkin:9411/
+
+
+  cards:
+    image: mubeenarman034/bank-cards
+    mem_limit: 700m
+    ports:
+      - "9000:8080"
+    networks:
+      - bank-network
+
+    depends_on:
+      configserver:
+        condition: service_healthy
+      eurekaserver:
+        condition: service_healthy
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+        window: 120s
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eurekaserver:8070/eureka/
+      SPRING_ZIPKIN_BASEURL: http://zipkin:9411/
+
+  gatewayserver:
+    image: mubeenarman034/bank-gatewayserver
+    mem_limit: 700m
+    ports:
+      - "8072:8072"
+    networks:
+      - bank-network
+    depends_on:
+      - configserver
+      - eurekaserver
+      - accounts
+      - loans
+      - cards
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 45s
+        max_attempts: 3
+        window: 120s
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+      SPRING_CONFIG_IMPORT: configserver:http://configserver:8071/
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eurekaserver:8070/eureka/
+      SPRING_ZIPKIN_BASEURL: http://zipkin:9411/
+
+networks:
+  bank-network:
